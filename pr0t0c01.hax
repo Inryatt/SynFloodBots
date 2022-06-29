@@ -1,0 +1,14 @@
+Data Structures (slave):
+range -> [start end], meaning this slave is currently searching between passwords start and end
+current -> int, the last password the slave verified, meaning every password between start and current have been verified
+verified -> [[0 10000] [30000 62^2]], array with all confirmed password ranges that have been verified, sorted
+peers -> {peerIP, (timestamp,peerRange)}, array that stores the peers that are presumably alive at the moment, the timestamp
+of the last time it was seen, and the ranges they are currently exploring
+
+Messages:
+IMHERE (args: verified, range) MULTICAST -> sent in response to an HELLO or GOTALL message, also whenever the slave is waiting 
+                                            its cooldown time when another slave recieves this message, updates their verified
+                                            array to match what the other has already done and responds with a NEWRANGE
+
+FOUNDPW (args: password) MULTICAST -> sent when a slave finds the correct password 
+                                      when another slave recieves this message, prints password, stops working
