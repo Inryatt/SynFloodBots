@@ -1,51 +1,24 @@
 # How to execute
 
-Run the server in your host (not inside any container)
+Create a control bot in your host 
 
-$ python3 main.py
+$ sudo python3 slave.py admin
 
-Launch containers with 1 worker each (this is your code)
+Create the desired amount of bots:
 
-When you successfully guess the password, the worker will receive an image file.
+\> add x
 
-# Using Docker
+where x is the number of bots desired. (Or omit it to add one.)
 
-## Build your docker container
+Available instructions:                                 
+"stop" - stop the bots                                  
+"status" - view botnet status                           
+"target" - change target                                
+"pause" - pause attack                                  
+"resume" - resume attack                                
+ "add" - add a bot                                       
+"add x" - add x bots (pausing is recommended ;) ) 
 
-$ docker build --tag projecto_final .
 
-## Launching containers
-
-$ docker run -d --name worker1 projecto_final
-
-## Monitor your containers
-
-$ docker ps -a
-
-## Stop your container
-
-$ docker stop <container id>
-
-## Remove old containers
-
-$ docker rm <container id>
-
-# Tips for install in Ubuntu:
-
-$ sudo apt-get install libsasl2-dev python-dev libldap2-dev libssl-dev python3-openssl
-
-# How to do server (only run this once)
-
-docker build --tag server .
-
-# runs
-docker run -d --name server server 
-
-# to delete
-docker stop server
-docker rm server
-
-# venv
-
-$ source venv/bin/activate
-$ ./setup.sh
+If you close the control bot, the entire swarm will be shut down - this is effectively a bug but kept due to being really handy as an emergency shutdown.
+If you create too many bots, your system *will* crash, be warned. 
